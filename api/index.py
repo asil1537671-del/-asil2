@@ -6,8 +6,8 @@ import os
 app = FastAPI()
 
 def init_db():
-    db_path = os.path.join(os.path.dirname(__file__), '../debts.db')
-    conn = sqlite3.connect(db_path)
+    # استخدام قاعدة بيانات في الذاكرة لـ Vercel
+    conn = sqlite3.connect(':memory:')
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS clients (
@@ -39,9 +39,10 @@ def init_db():
         )
     ''')
     conn.commit()
-    conn.close()
+    return conn
 
-init_db()
+# إنشاء اتصال عالمي بقاعدة البيانات
+db_connection = init_db()
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -140,29 +141,21 @@ async def home():
 
 @app.get("/api/clients")
 async def get_clients():
-    db_path = os.path.join(os.path.dirname(__file__), '../debts.db')
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    cursor = db_connection.cursor()
     cursor.execute('SELECT id, name, phone FROM clients ORDER BY name')
     clients = [{"id": c[0], "name": c[1], "phone": c[2]} for c in cursor.fetchall()]
-    conn.close()
     return JSONResponse(content=clients)
 
 @app.post("/api/clients")
 async def add_client(request: Request):
     data = await request.json()
-    db_path = os.path.join(os.path.dirname(__file__), '../debts.db')
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    cursor = db_connection.cursor()
     try:
         cursor.execute('INSERT INTO clients (name, phone) VALUES (?, ?)', (data['name'], data.get('phone', '')))
-        conn.commit()
-        conn.close()
+        db_connection.commit()
         return JSONResponse(content={"success": True})
     except sqlite3.IntegrityError:
-        conn.close()
         return JSONResponse(content={"success": False, "error": "العميل موجود بالفعل"})
 
-# Vercel handler
-def handler(request):
-    return app(request.scope, request.receive, request.send)
+# Vercel expects the app to be available
+# No additional handler needed
