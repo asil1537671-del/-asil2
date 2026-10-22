@@ -1,4 +1,5 @@
-# Vercel handler
-from main import app
+# Vercel serverless handler
+from main import app as application
 
-handler = app
+# Vercel expects the app to be named 'app' or be in a variable called 'handler'
+app = application
