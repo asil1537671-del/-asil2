@@ -32,6 +32,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             debt_id INTEGER,
             amount REAL NOT NULL,
+            currency TEXT,
+            notes TEXT,
             payment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (debt_id) REFERENCES debts (id)
         )
@@ -163,6 +165,18 @@ async def home():
                                     <label class="form-label">مبلغ التسديد</label>
                                     <input type="number" class="form-control" id="payment-amount" required>
                                 </div>
+                                <div class="mb-3">
+                                    <label class="form-label">العملة</label>
+                                    <select class="form-select" id="payment-currency" required>
+                                        <option value="ريال يمني" selected>ريال يمني</option>
+                                        <option value="ريال سعودي">ريال سعودي</option>
+                                        <option value="دولار أمريكي">دولار أمريكي</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">ملاحظات (اختياري)</label>
+                                    <textarea class="form-control" id="payment-notes"></textarea>
+                                </div>
                                 <button type="submit" class="btn green-btn">تسديد</button>
                             </form>
                         </div>
@@ -287,15 +301,19 @@ async def home():
                 e.preventDefault();
                 const debtId = document.getElementById('debt-select').value;
                 const amount = parseFloat(document.getElementById('payment-amount').value);
+                const currency = document.getElementById('payment-currency').value;
+                const notes = document.getElementById('payment-notes').value;
                 
                 const response = await fetch('/api/payments', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ debt_id: debtId, amount })
+                    body: JSON.stringify({ debt_id: debtId, amount, currency, notes })
                 });
                 
                 if (response.ok) {
                     alert('تم التسديد بنجاح!');
+                    document.getElementById('payment-amount').value = '';
+                    document.getElementById('payment-notes').value = '';
                     viewClient(currentClientId, document.getElementById('client-name-display').textContent.replace('👤 ', ''));
                 }
             });
@@ -360,7 +378,7 @@ async def get_client(client_id: int):
         FROM debts d
         WHERE d.client_id = ?
         UNION ALL
-        SELECT 'payment' as type, p.id, p.amount, d.currency, p.payment_date, NULL as notes
+        SELECT 'payment' as type, p.id, p.amount, p.currency, p.payment_date, p.notes
         FROM payments p
         JOIN debts d ON p.debt_id = d.id
         WHERE d.client_id = ?
@@ -388,7 +406,8 @@ async def add_debt(request: Request):
 async def add_payment(request: Request):
     data = await request.json()
     cursor = db_connection.cursor()
-    cursor.execute('INSERT INTO payments (debt_id, amount) VALUES (?, ?)', (data['debt_id'], data['amount']))
+    cursor.execute('INSERT INTO payments (debt_id, amount, currency, notes) VALUES (?, ?, ?, ?)', 
+                   (data['debt_id'], data['amount'], data.get('currency', 'ريال يمني'), data.get('notes', '')))
     cursor.execute('UPDATE debts SET paid = paid + ? WHERE id = ?', (data['amount'], data['debt_id']))
     db_connection.commit()
     return JSONResponse(content={"success": True})
