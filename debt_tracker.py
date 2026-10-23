@@ -1,362 +1,229 @@
 import streamlit as st
-import sqlite3
-from datetime import datetime
+import streamlit.components.v1 as components
 
-st.set_page_config(page_title="تسجيل الديون", page_icon="💰", layout="wide")
+# إعدادات الصفحة
+st.set_page_config(
+    page_title="دفتر ديوني",
+    page_icon="💰",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# تخصيص الألوان والتصميم ليشابه الواجهة الأصلية
 st.markdown("""
     <style>
-    div.stButton > button[kind="primary"] {
-        background-color: #dc3545 !important;
-        color: white !important;
+    .main {
+        background-color: #0e1117;
+        color: #ffffff;
     }
-    div.stButton > button[kind="primary"]:hover {
-        background-color: #c82333 !important;
+    .stButton>button {
+        width: 100%;
+        border-radius: 8px;
+        font-weight: bold;
     }
-    .green-btn {
-        background-color: #28a745 !important;
-        color: white !important;
-    }
-    .green-btn:hover {
-        background-color: #218838 !important;
+    .metric-card {
+        background-color: #1f2937;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("💰 تطبيق تسجيل الديون")
+# تهيئة بيانات الحالة الافتراضية
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
 
-def init_db():
-    conn = sqlite3.connect('debts.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS clients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            phone TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS debts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id INTEGER,
-            amount REAL NOT NULL,
-            currency TEXT NOT NULL,
-            notes TEXT,
-            paid REAL DEFAULT 0.0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (client_id) REFERENCES clients (id)
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            debt_id INTEGER,
-            amount REAL NOT NULL,
-            payment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (debt_id) REFERENCES debts (id)
-        )
-    ''')
-    conn.commit()
-    conn.close()
+if 'customers' not in st.session_state:
+    # هيكل بيانات العملاء والديون
+    st.session_state.customers = {
+        "أحمد محمد": [
+            {"type": "دين", "amount": 500, "date": "2026-06-01", "note": "شراء بضاعة"},
+            {"type": "تسديد", "amount": 200, "date": "2026-06-05", "note": "دفعة أولى"}
+        ],
+        "خالد علي": [
+            {"type": "دين", "amount": 1200, "date": "2026-05-20", "note": "قرض شخصي"}
+        ]
+    }
 
-def get_clients():
-    conn = sqlite3.connect('debts.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, name FROM clients ORDER BY name')
-    clients = cursor.fetchall()
-    conn.close()
-    return clients
+if 'selected_customer' not in st.session_state:
+    st.session_state.selected_customer = None
 
-def add_client(name, phone=""):
-    conn = sqlite3.connect('debts.db')
-    cursor = conn.cursor()
-    try:
-        cursor.execute('INSERT INTO clients (name, phone) VALUES (?, ?)', (name, phone))
-        conn.commit()
-        conn.close()
-        return True
-    except sqlite3.IntegrityError:
-        conn.close()
-        return False
-
-def add_debt(client_id, amount, currency, notes=""):
-    conn = sqlite3.connect('debts.db')
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO debts (client_id, amount, currency, notes) VALUES (?, ?, ?, ?)',
-                   (client_id, amount, currency, notes))
-    conn.commit()
-    debt_id = cursor.lastrowid
-    conn.close()
-    return debt_id
-
-def get_client_debts(client_id):
-    conn = sqlite3.connect('debts.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, amount, currency, notes, paid, created_at 
-        FROM debts 
-        WHERE client_id = ? 
-        ORDER BY created_at DESC
-    ''', (client_id,))
-    debts = cursor.fetchall()
-    conn.close()
-    return debts
-
-def add_payment(debt_id, amount):
-    conn = sqlite3.connect('debts.db')
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO payments (debt_id, amount) VALUES (?, ?)', (debt_id, amount))
-    cursor.execute('UPDATE debts SET paid = paid + ? WHERE id = ?', (amount, debt_id))
-    conn.commit()
-    conn.close()
-
-def get_debt_payments(debt_id):
-    conn = sqlite3.connect('debts.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT amount, payment_date FROM payments WHERE debt_id = ? ORDER BY payment_date DESC', (debt_id,))
-    payments = cursor.fetchall()
-    conn.close()
-    return payments
-
-def get_client_transactions(client_id):
-    conn = sqlite3.connect('debts.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT 'debt' as type, d.id, d.amount, d.currency, d.created_at, d.notes, NULL as related_debt_id
-        FROM debts d
-        WHERE d.client_id = ?
-        UNION ALL
-        SELECT 'payment' as type, p.id, p.amount, d.currency, p.payment_date, NULL as notes, p.debt_id
-        FROM payments p
-        JOIN debts d ON p.debt_id = d.id
-        WHERE d.client_id = ?
-        ORDER BY created_at DESC
-    ''', (client_id, client_id))
-    transactions = cursor.fetchall()
-    conn.close()
-    return transactions
-
-init_db()
-
-if "selected_client_id" not in st.session_state:
-    st.session_state.selected_client_id = None
-
-if "selected_client_name" not in st.session_state:
-    st.session_state.selected_client_name = None
-
-clients = get_clients()
-client_options = {"-- عميل جديد --": 0}
-for client_id, client_name in clients:
-    client_options[client_name] = client_id
-
-if st.session_state.selected_client_id is not None:
-    if st.button("← العودة إلى قائمة العملاء"):
-        st.session_state.selected_client_id = None
-        st.session_state.selected_client_name = None
-        st.rerun()
-    
-    client_id = st.session_state.selected_client_id
-    client_name = st.session_state.selected_client_name
-    
-    st.title(f"👤 سجل العميل: {client_name}")
-    
-    st.subheader("📊 ملخص الحساب")
-    
-    conn = sqlite3.connect('debts.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*), SUM(amount), SUM(paid) FROM debts WHERE client_id = ?', (client_id,))
-    result = cursor.fetchone()
-    total_debts_count = result[0] or 0
-    total_amount = result[1] or 0.0
-    total_paid = result[2] or 0.0
-    remaining_balance = total_amount - total_paid
-    conn.close()
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("إجمالي الديون", total_debts_count)
+# شاشة تسجيل الدخول
+def login_screen():
+    st.markdown("<h1 style='text-align: center;'>تسجيل الدخول - دفتر ديوني</h1>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.metric("إجمالي المدفوعات", f"{total_paid:,.2f}")
-    with col3:
-        st.metric("الرصيد المتبقي", f"{remaining_balance:,.2f}")
-    
-    st.divider()
-    
-    st.subheader("📋 سجل العمليات")
-    transactions = get_client_transactions(client_id)
-    
-    if not transactions:
-        st.info("لا توجد عمليات لهذا العميل")
-    else:
-        import pandas as pd
-        transaction_data = []
-        for trans in transactions:
-            trans_type, trans_id, amount, currency, date, notes, related_debt_id = trans
-            if trans_type == 'debt':
-                type_label = "دين"
-                type_color = "🔴"
+        username = st.text_input("اسم المستخدم")
+        password = st.text_input("كلمة المرور", type="password")
+        if st.button("دخول"):
+            if username and password:  # يمكنك تخصيص شرط التحقق هنا
+                st.session_state.logged_in = True
+                st.rerun()
             else:
-                type_label = "تسديد"
-                type_color = "🟢"
-            
-            transaction_data.append({
-                "": type_color,
-                "النوع": type_label,
-                "المبلغ": f"{amount:,.2f} {currency}",
-                "التاريخ": date
-            })
+                st.error("الرجاء إدخال بيانات الصحيحة")
+
+# الآلة الحاسبة العائمة (تظهر في الواجهة كجزء عائم تفاعلي)
+def floating_calculator():
+    calc_html = """
+    <div id="floating-calc" style="position: fixed; bottom: 20px; left: 20px; background: #1f2937; padding: 15px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); z-index: 9999; width: 220px; direction: ltr;">
+        <div style="font-size: 14px; color: #fff; margin-bottom: 5px; text-align: right;">آلة حاسبة</div>
+        <input type="text" id="calc-display" style="width: 100%; height: 35px; font-size: 18px; text-align: right; margin-bottom: 10px; background: #111; color: #0ff; border: 1px solid #444; border-radius: 5px;" disabled>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px;">
+            <button onclick="clearCalc()" style="background: #ef4444; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">C</button>
+            <button onclick="appendCalc('/')" style="background: #374151; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">/</button>
+            <button onclick="appendCalc('*')" style="background: #374151; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">*</button>
+            <button onclick="appendCalc('-')" style="background: #374151; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">-</button>
+            <button onclick="appendCalc('7')" style="background: #4b5563; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">7</button>
+            <button onclick="appendCalc('8')" style="background: #4b5563; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">8</button>
+            <button onclick="appendCalc('9')" style="background: #4b5563; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">9</button>
+            <button onclick="appendCalc('+')" style="background: #374151; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">+</button>
+            <button onclick="appendCalc('4')" style="background: #4b5563; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">4</button>
+            <button onclick="appendCalc('5')" style="background: #4b5563; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">5</button>
+            <button onclick="appendCalc('6')" style="background: #4b5563; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">6</button>
+            <button onclick="calculateResult()" style="background: #10b981; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer; grid-row: span 2;">=</button>
+            <button onclick="appendCalc('1')" style="background: #4b5563; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">1</button>
+            <button onclick="appendCalc('2')" style="background: #4b5563; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">2</button>
+            <button onclick="appendCalc('3')" style="background: #4b5563; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">3</button>
+            <button onclick="appendCalc('0')" style="background: #4b5563; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer; grid-column: span 2;">0</button>
+            <button onclick="appendCalc('.')" style="background: #4b5563; color: #fff; border:none; padding: 8px; border-radius:4px; cursor:pointer;">.</button>
+        </div>
+    </div>
+    <script>
+        function appendCalc(val) {
+            document.getElementById('calc-display').value += val;
+        }
+        function clearCalc() {
+            document.getElementById('calc-display').value = '';
+        }
+        function calculateResult() {
+            try {
+                document.getElementById('calc-display').value = eval(document.getElementById('calc-display').value);
+            } catch(e) {
+                document.getElementById('calc-display').value = 'خطأ';
+            }
+        }
+    </script>
+    """
+    components.html(calc_html, height=270)
+
+# تطبيق الرئيسي بعد تسجيل الدخول
+def main_app():
+    # شريط التنقل الجانبي
+    st.sidebar.title("إدارة دفتر ديوني")
+    if st.sidebar.button("تسجيل الخروج"):
+        st.session_state.logged_in = False
+        st.session_state.selected_customer = None
+        st.rerun()
+
+    st.sidebar.markdown("---")
+    
+    # عرض الآلة الحاسبة العائمة في الجانب أو الشاشة
+    floating_calculator()
+
+    # إذا لم يتم اختيار عميل، نعرض قائمة إجمالي العملاء
+    if st.session_state.selected_customer is None:
+        st.title("📊 لوحة التحكم - إجمالي العملاء")
         
-        df = pd.DataFrame(transaction_data)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    
-    st.divider()
-    
-    st.subheader("⚡ عمليات سريعة")
-    col_left, col_right = st.columns(2)
-    
-    with col_left:
-        with st.container():
-            if st.button("💵 تسجيل تسديد", use_container_width=True, key="green_payment_btn"):
-                st.session_state.show_payment = True
-                st.rerun()
-            
-            if st.session_state.get("show_payment", False):
-                debts = get_client_debts(client_id)
-                if debts:
-                    debt_options = {f"دين {d[1]:,.2f} {d[2]} - {d[5]}": d[0] for d in debts}
-                    selected_debt_display = st.selectbox("اختر الدين للتسديد", list(debt_options.keys()), key="pay_debt_select")
-                    pay_amount_str = st.text_input("مبلغ التسديد", key="pay_amount_input")
-                    
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        if st.button("تأكيد التسديد", key="confirm_payment"):
-                            selected_debt_id = debt_options[selected_debt_display]
-                            try:
-                                pay_amount = float(pay_amount_str) if pay_amount_str else 0.0
-                            except ValueError:
-                                pay_amount = 0.0
-                            
-                            if pay_amount > 0:
-                                debt_amount = next(d[1] - d[4] for d in debts if d[0] == selected_debt_id)
-                                if pay_amount <= debt_amount:
-                                    add_payment(selected_debt_id, pay_amount)
-                                    st.success(f"تم تسديد {pay_amount:,.2f} بنجاح!")
-                                    st.session_state.show_payment = False
-                                    st.rerun()
-                                else:
-                                    st.error(f"المبلغ المُدخل يتجاوز المتبقي ({debt_amount:,.2f})")
-                            else:
-                                st.error("الرجاء إدخال المبلغ")
-                    
-                    with col_b:
-                        if st.button("إلغاء", key="cancel_payment"):
-                            st.session_state.show_payment = False
-                            st.rerun()
+        # إضافة عميل جديد
+        with st.expander("➕ إضافة عميل جديد"):
+            new_cust_name = st.text_input("اسم العميل الجديد")
+            if st.button("حفظ العميل"):
+                if new_cust_name and new_cust_name not in st.session_state.customers:
+                    st.session_state.customers[new_cust_name] = []
+                    st.success(f"تم إضافة العميل {new_cust_name} بنجاح")
+                    st.rerun()
                 else:
-                    st.info("لا توجد ديون للتسديد")
-    
-    with col_right:
-        with st.container():
-            if st.button("➕ إضافة دين جديد", use_container_width=True, type="primary"):
-                st.session_state.show_add_debt = True
-                st.rerun()
-            
-            if st.session_state.get("show_add_debt", False):
-                new_amount_str = st.text_input("المبلغ", key="add_debt_amount")
-                new_currency = st.selectbox("العملة", ["ريال يمني", "ريال سعودي", "دولار أمريكي"], key="add_debt_currency")
-                new_notes = st.text_area("ملاحظات (اختياري)", key="add_debt_notes")
+                    st.warning("الاسم موجود مسبقاً أو فارغ")
+
+        st.markdown("### قائمة العملاء")
+        
+        # بطاقات أو جدول إجمالي العملاء
+        if not st.session_state.customers:
+            st.info("لا يوجد عملاء مضافين حالياً.")
+        else:
+            for cust, records in st.session_state.customers.items():
+                total_debt = sum(r['amount'] for r in records if r['type'] == 'دين')
+                total_paid = sum(r['amount'] for r in records if r['type'] == 'تسديد')
+                remaining = total_debt - total_paid
+
+                col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+                col1.markdown(f"**👤 {cust}**")
+                col2.markdown(f"إجمالي الدين: `{total_debt}`")
+                col3.markdown(f"المتبقي: **`{remaining}`**")
                 
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    if st.button("تأكيد الإضافة", key="confirm_add_debt"):
-                        try:
-                            new_amount = float(new_amount_str) if new_amount_str else 0.0
-                        except ValueError:
-                            new_amount = 0.0
-                        
-                        if new_amount > 0:
-                            add_debt(client_id, new_amount, new_currency, new_notes)
-                            st.success("تم إضافة الدين بنجاح!")
-                            st.session_state.show_add_debt = False
-                            st.rerun()
-                        else:
-                            st.error("الرجاء إدخال المبلغ")
+                if col4.button(f"عرض السجل", key=f"btn_{cust}2"):
+                    st.session_state.selected_customer = cust
+                    st.rerun()
+                st.markdown("---")
+
+    else:
+        # عرض سجلات الديون الكاملة للعميل المحدد
+        cust = st.session_state.selected_customer
+        if st.button("⬅️ العودة إلى قائمة العملاء"):
+            st.session_state.selected_customer = None
+            st.rerun()
+
+        st.title(, فلان: f"📁 سجل ديون العميل: {cust}")
+
+        records = st.session_state.customers[cust]
+
+        # نماذج إضافة دين أو تسديد
+        col_add1, col_add2 = st.columns(2)
+        with col_add1:
+            with st.form(key="add_debt_form"):
+                st.subheader("➕ أضف دين جديد")
+                d_amount = st.number_input("المبلغ", min_value=0.0, step=10.0, key="d_amt")
+                d_date = st.date_input("التاريخ", key="d_date")
+                d_note = st.text_input("ملاحظة / البيان", key="d_note")
+                submit_debt = st.form_submit_button("حفظ الدين")
+                if submit_debt:
+                    records.append({"type": "دين", "amount": d_amount, "date": str(d_date), "note": d_note})
+                    st.success("تم إضافة الدين بنجاح")
+                    st.rerun()
+
+        with col_add2:
+            with st.form(key="add_pay_form"):
+                st.subheader("💵 تسجيل تسديد")
+                p_amount = st.number_input("مبلغ التسديد", min_value=0.0, step=10.0, key="p_amt")
+                p_date = st.date_input("تاريخ التسديد", key="p_date")
+                p_note = st.text_input("ملاحظة التسديد", key="p_note")
+                submit_pay = st.form_submit_button("حفظ التسديد")
+                if submit_pay:
+                    records.append({"type": "تسديد", "amount": p_amount, "date": str(p_date), "note": p_note})
+                    st.success("تم تسجيل التسديد بنجاح")
+                    st.rerun()
+
+        st.markdown("---")
+        st.subheader("📋 السجلات الكاملة (تعديل وحذف)")
+
+        if not records:
+            st.info("لا توجد سجلات مسجلة لهذا العميل بعد.")
+        else:
+            for idx, rec in enumerate(records):
+                col_r1, col_r2, col_r3, col_r4, col_r5 = st.columns([1, 2, 2, 2, 2])
+                col_r1.write(f"#{idx+1}")
+                col_r2.write(f"**{rec['type']}**")
+                col_r3.write(f"المبلغ: {rec['amount']}")
+                col_r4.write(f"التاريخ: {rec['date']}")
                 
-                with col_b:
-                    if st.button("إلغاء", key="cancel_add_debt"):
-                        st.session_state.show_add_debt = False
+                # زر الحذف والتعديل لكل سطر
+                with col_r5:
+                    if st.button("🗑️ حذف", key=f"del_{cust}_{idx}"):
+                        records.pop(idx)
+                        st.success("تم الحذف بنجاح")
                         st.rerun()
 
-else:
-    tab1, tab2 = st.tabs(["➕ إضافة دين", "📋 سجلات العملاء"])
-    
-    with tab1:
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.header("إضافة دين جديد")
-            
-            selected_client = st.selectbox("اختر العميل", list(client_options.keys()))
-            
-            if selected_client == "-- عميل جديد --":
-                with st.form("new_client_form"):
-                    new_client_name = st.text_input("اسم العميل الجديد")
-                    new_client_phone = st.text_input("رقم الهاتف (اختياري)")
-                    new_client_submit = st.form_submit_button("إضافة العميل")
-                    
-                    if new_client_submit and new_client_name:
-                        if add_client(new_client_name, new_client_phone):
-                            st.success("تم إضافة العميل بنجاح!")
-                            st.rerun()
-                        else:
-                            st.error("العميل موجود بالفعل!")
-            else:
-                client_id = client_options[selected_client]
-                
-                with st.form("debt_form"):
-                    amount_str = st.text_input("المبلغ")
-                    currency = st.selectbox("العملة", ["ريال يمني", "ريال سعودي", "دولار أمريكي"])
-                    notes = st.text_area("ملاحظات (اختياري)")
-                    
-                    submitted = st.form_submit_button("حفظ الدين")
-                    
-                    if submitted:
-                        try:
-                            amount = float(amount_str) if amount_str else 0.0
-                        except ValueError:
-                            amount = 0.0
-                        
-                        if amount > 0:
-                            add_debt(client_id, amount, currency, notes)
-                            st.success("تم حفظ الدين بنجاح!")
-                            st.rerun()
-                        else:
-                            st.error("الرجاء إدخال المبلغ")
-        
-        with col2:
-            st.header("ملخص عام")
-            
-            conn = sqlite3.connect('debts.db')
-            cursor = conn.cursor()
-            cursor.execute('SELECT COUNT(*) FROM debts')
-            total_debts = cursor.fetchone()[0]
-            
-            cursor.execute('SELECT SUM(amount - paid) FROM debts')
-            total_amount = cursor.fetchone()[0] or 0.0
-            conn.close()
-            
-            st.metric("إجمالي الديون", total_debts)
-            st.metric("إجمالي المبالغ المتبقية", f"{total_amount:,.2f}")
-    
-    with tab2:
-        st.header("سجلات العملاء")
-        
-        search_query = st.text_input("🔍 بحث عن عميل", key="search_client_input")
-    filtered_clients = [c for c in clients if search_query.lower() in c[1].lower()]
+        # زر حذف العميل بالكامل
+        if st.button("🗑️ حذف العميل وسجلاته بالكامل", type="primary"):
+            del st.session_state.customers[cust]
+            st.session_state.selected_customer = None
+            st.success("تم حذف العميل بنجاح")
+            st.rerun()
 
-    for client_id, client_name in filtered_clients:
-     if st.button(f"👤 {client_name}", key=f"client_{client_id}"):
-        st.session_state.selected_client_id = client_id
-        st.session_state.selected_client_name = client_name
-        st.rerun()
+# التحكم في عرض الشاشة بناءً على حالة تسجيل الدخول
+if not st.session_state.logged_in:
+    login_screen()
+else:
+    main_app()
